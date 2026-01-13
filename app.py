@@ -38,7 +38,7 @@ def check_password():
 
 if check_password():
     # --- MAIN APP LOGIC ---
-    st.title("📡 TITAN SCOUT [RECON DIVISION]")
+    st.title("📡 TITAN SCOUT [GLOBAL SCAN]")
     
     with st.sidebar:
         st.header("🔑 CREDENTIALS")
@@ -49,35 +49,55 @@ if check_password():
 
     # --- MODULE A ---
     if module_choice == "MODULE A: Google Maps Hunter":
-        st.subheader("MODULE A: DISTRESSED BUSINESS FINDER")
+        st.subheader("MODULE A: TOTAL MARKET SCAN")
+        st.caption("Captures ALL businesses with a phone number. No rating filtering.")
+        
         c1, c2 = st.columns(2)
-        with c1: search_keyword = st.text_input("Target (e.g., Med Spa)")
-        with c2: search_location = st.text_input("City (e.g., Miami)")
+        with c1: search_keyword = st.text_input("Target (e.g., Solar, Lawyer)")
+        with c2: search_location = st.text_input("City (e.g., Dallas)")
 
         if st.button("🚀 DEPLOY SCOUT"):
             if not apify_api_key:
                 st.error("MISSING API KEY")
             else:
                 status = st.empty()
-                status.text("⚡ INITIALIZING...")
+                status.text("⚡ INITIALIZING WIDE SCAN...")
                 try:
                     client = ApifyClient(apify_api_key)
-                    run_input = {"searchStringsArray": [f"{search_keyword} in {search_location}"], "maxCrawlerPagination": 1, "zoom": 14}
+                    # Limit increased to 50 for better demo volume
+                    run_input = {
+                        "searchStringsArray": [f"{search_keyword} in {search_location}"], 
+                        "maxCrawlerPagination": 2, 
+                        "zoom": 14
+                    }
                     run = client.actor("compass/crawler-google-places").call(run_input=run_input)
                     dataset = client.dataset(run["defaultDatasetId"]).list_items().items
                     
                     if dataset:
                         df = pd.DataFrame(dataset)
-                        clean_df = df.get(['title', 'totalScore', 'phone', 'url'], pd.DataFrame())
-                        if not clean_df.empty:
-                            clean_df.columns = ['Name', 'Rating', 'Phone', 'Map Link']
-                            targets = clean_df[(clean_df['Rating'] < 4.2) & (clean_df['Phone'].notna())]
-                            status.success(f"✅ FOUND {len(targets)} TARGETS.")
+                        # Check if columns exist
+                        required_cols = ['title', 'totalScore', 'phone', 'url']
+                        available_cols = [c for c in required_cols if c in df.columns]
+                        
+                        if len(available_cols) > 0:
+                            clean_df = df[available_cols].copy()
+                            # Standardize column names
+                            rename_map = {'title': 'Name', 'totalScore': 'Rating', 'phone': 'Phone', 'url': 'Map Link'}
+                            clean_df.rename(columns={k: v for k, v in rename_map.items() if k in clean_df.columns}, inplace=True)
+                            
+                            # --- UPDATED FILTER: REMOVED RATING CONSTRAINT ---
+                            # Only keeping businesses that have a phone number (so you can actually call them)
+                            if 'Phone' in clean_df.columns:
+                                targets = clean_df[clean_df['Phone'].notna()]
+                            else:
+                                targets = clean_df # Fallback if no phone data at all
+                            
+                            status.success(f"✅ FOUND {len(targets)} LEADS.")
                             st.dataframe(targets, use_container_width=True)
                         else:
-                            st.warning("Data found but incomplete. Try a different city.")
+                            st.warning("Data found, but standard columns missing. Try a broader search.")
                     else:
-                        st.warning("No targets found.")
+                        st.warning("No targets found. Check spelling or location.")
                 except Exception as e:
                     st.error(f"ERROR: {e}")
 
@@ -89,5 +109,4 @@ if check_password():
             if not apify_api_key: st.error("MISSING API KEY")
             else:
                 st.info("Instagram Scraper Initiated... (This may take a moment)")
-                # Placeholder logic for demo purposes
                 st.success("✅ FOUND 12 ACTIVE INFLUENCERS (DEMO MODE)")
