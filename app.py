@@ -4,7 +4,7 @@ from apify_client import ApifyClient
 import re
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="TITAN SCOUT v3.0", page_icon="📡", layout="wide")
+st.set_page_config(page_title="TITAN SCOUT v3.1", page_icon="📡", layout="wide")
 
 # --- TITAN AESTHETIC ---
 st.markdown("""
@@ -39,39 +39,31 @@ def check_password():
 
 # --- PHONE CLEANING ENGINE ---
 def clean_and_format_phone(phone_raw):
-    """Converts (123) 456-7890 to +11234567890"""
     if pd.isna(phone_raw): return None
-    
-    # Remove all non-digit characters
     digits = re.sub(r'\D', '', str(phone_raw))
-    
-    # US Number Logic
     if len(digits) == 10:
         return f"+1{digits}"
     elif len(digits) == 11 and digits.startswith('1'):
         return f"+{digits}"
     else:
-        return None # Invalid length
+        return None
 
 def is_likely_mobile(phone_clean):
-    """Filters out Toll-Free numbers (800, 888, etc) which are definitely Landlines."""
     if not phone_clean: return False
-    
-    # Check for US Toll-Free prefixes (after the +1)
     toll_free_prefixes = ['800', '888', '877', '866', '855', '844', '833']
-    
-    # phone_clean format is +1XXXXXXXXXX. 
-    # Area code is at index 2:5 (after +1)
-    area_code = phone_clean[2:5]
-    
-    if area_code in toll_free_prefixes:
-        return False # It is a business landline
-    return True # It MIGHT be a mobile (Standard Area Code)
+    if len(phone_clean) >= 5:
+        area_code = phone_clean[2:5]
+        if area_code in toll_free_prefixes:
+            return False
+    return True
 
 # --- SCRIPT ENGINE ---
 def generate_titan_script(row, city):
-    name = str(row['Name']).replace('"', '').replace("'", "")
-    rating = float(row['Rating']) if pd.notnull(row['Rating']) else 0.0
+    name = str(row.get('Name', 'Business')).replace('"', '').replace("'", "")
+    try:
+        rating = float(row.get('Rating', 0))
+    except:
+        rating = 0.0
     
     if rating >= 4.9:
         return f"Hey {name}, saw your perfect rating in {city}. You clearly dominate the market. We are rolling out a new AI Standard for elite firms to handle call overflow. Is this the owner?"
@@ -81,12 +73,11 @@ def generate_titan_script(row, city):
         return "SKIP - LOW RATING"
 
 if check_password():
-    st.title("📡 TITAN SCOUT [V3.0 - CLEANER ENABLED]")
+    st.title("📡 TITAN SCOUT [V3.1 - CRASH PROOF]")
     
     with st.sidebar:
         st.header("🔑 CONTROL PANEL")
         apify_api_key = st.text_input("Apify API Key", type="password")
-        st.caption("Enter Key to Activate Scanner")
         
         module_choice = st.radio("Select Module:", ["MODULE A: Google Maps Hunter"])
 
@@ -111,49 +102,74 @@ if check_password():
                         "zoom": 14
                     }
                     run = client.actor("compass/crawler-google-places").call(run_input=run_input)
-                    dataset = client.dataset(run["defaultDatasetId"]).list_items().items
                     
-                    if dataset:
-                        df = pd.DataFrame(dataset)
+                    # ERROR HANDLING: CHECK IF DATASET EXISTS
+                    if not run:
+                        st.error("Scraper failed to start.")
+                    else:
+                        dataset_items = client.dataset(run["defaultDatasetId"]).list_items().items
                         
-                        # 2. CLEAN & PROCESS DATA
-                        # Added 'email' to the fetch list
-                        required_cols = ['title', 'totalScore', 'phone', 'url', 'email'] # Note: Apify might output 'email' or 'emails'
-                        available_cols = [c for c in df.columns if c in ['title', 'totalScore', 'phone', 'url', 'email']]
-                        
-                        if len(available_cols) > 0:
-                            clean_df = df[available_cols].copy()
-                            rename_map = {'title': 'Name', 'totalScore': 'Rating', 'phone': 'Phone', 'url': 'Map Link', 'email': 'Email'}
-                            clean_df.rename(columns={k: v for k, v in rename_map.items() if k in clean_df.columns}, inplace=True)
+                        if dataset_items:
+                            df = pd.DataFrame(dataset_items)
                             
-                            # 3. APPLY CLEANING
+                            # DEBUG: Show raw columns if something breaks
+                            with st.expander("Show Raw Data (Debug)"):
+                                st.write(df.head())
+                                st.write(f"Columns Found: {list(df.columns)}")
+
+                            # --- ROBUST COLUMN MAPPING ---
+                            # This fixes the "Missing Key" errors
+                            clean_df = pd.DataFrame()
+                            
+                            # Map Name
+                            if 'title' in df.columns: clean_df['Name'] = df['title']
+                            elif 'name' in df.columns: clean_df['Name'] = df['name']
+                            else: clean_df['Name'] = "Unknown Business"
+
+                            # Map Phone
+                            if 'phone' in df.columns: clean_df['Phone'] = df['phone']
+                            elif 'phoneNumber' in df.columns: clean_df['Phone'] = df['phoneNumber']
+                            else: clean_df['Phone'] = None
+                            
+                            # Map Rating
+                            if 'totalScore' in df.columns: clean_df['Rating'] = df['totalScore']
+                            elif 'rating' in df.columns: clean_df['Rating'] = df['rating']
+                            else: clean_df['Rating'] = 0.0
+
+                            # Map Email (Handle Missing)
+                            if 'email' in df.columns: clean_df['Email'] = df['email']
+                            elif 'emails' in df.columns: clean_df['Email'] = df['emails']
+                            else: clean_df['Email'] = "N/A"
+
+                            # --- PROCESSING ---
+                            # 1. Drop rows with no phone
+                            clean_df = clean_df.dropna(subset=['Phone'])
+                            
+                            # 2. Clean Phone
                             clean_df['Clean_Phone'] = clean_df['Phone'].apply(clean_and_format_phone)
+                            
+                            # 3. Filter Landlines
                             clean_df['Is_Mobile_Likely'] = clean_df['Clean_Phone'].apply(is_likely_mobile)
                             
-                            # 4. FILTER JUNK
-                            # Keep only rows with valid phones AND likely mobiles
                             targets = clean_df[
                                 (clean_df['Clean_Phone'].notna()) & 
                                 (clean_df['Is_Mobile_Likely'] == True)
                             ].copy()
                             
-                            # 5. GENERATE SCRIPTS
+                            # 4. Generate Scripts
                             targets['SMS_Script'] = targets.apply(lambda row: generate_titan_script(row, search_location), axis=1)
                             targets = targets[targets['SMS_Script'] != "SKIP - LOW RATING"]
 
-                            # 6. DISPLAY RESULTS
+                            # --- DISPLAY ---
                             status.success(f"✅ TARGETS ACQUIRED: {len(targets)}")
-                            st.caption("Removed Toll-Free (800) numbers and Invalid formats.")
+                            st.caption(f"Filtered {len(clean_df) - len(targets)} landlines/bad numbers.")
                             
                             st.dataframe(targets[['Name', 'Rating', 'Clean_Phone', 'Email', 'SMS_Script']], use_container_width=True)
                             
-                            # Download Button
                             csv = targets.to_csv(index=False).encode('utf-8')
                             st.download_button("⬇️ DOWNLOAD MISSION FILE (CSV)", csv, "titan_mission_file.csv", "text/csv")
                             
                         else:
-                            st.warning("Data found, but columns missing.")
-                    else:
-                        st.warning("No targets found.")
+                            st.warning("No data found. Try a different city.")
                 except Exception as e:
-                    st.error(f"ERROR: {e}")
+                    st.error(f"CRITICAL ERROR: {e}")
